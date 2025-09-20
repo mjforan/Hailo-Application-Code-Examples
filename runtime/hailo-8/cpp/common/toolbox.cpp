@@ -180,7 +180,6 @@ void show_progress(hailo_utils::InputType &input_type, int progress, size_t fram
 }
 
 void print_inference_statistics(std::chrono::duration<double> inference_time,
-    const std::string &hef_file,
     double frame_count,
     std::chrono::duration<double> total_time)
 {
@@ -278,7 +277,7 @@ void preprocess_video_frames(cv::VideoCapture &capture,
 }
 
 void preprocess_image_frames(const std::string &input_path,
-                          uint32_t width, uint32_t height, size_t batch_size,
+                          uint32_t width, uint32_t height,
                           std::shared_ptr<BoundedTSQueue<std::pair<std::vector<cv::Mat>, std::vector<cv::Mat>>>> preprocessed_batch_queue,
                           PreprocessCallback preprocess_callback) {
     cv::Mat org_frame = cv::imread(input_path);
@@ -321,15 +320,14 @@ hailo_status run_post_process(
     int org_width,
     size_t frame_count,
     cv::VideoCapture &capture,
-    double fps,
-    size_t batch_size,
     std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue,
+    std::shared_ptr<rclcpp::Node> ros_node,
     PostprocessCallback postprocess_callback) {
     
-    cv::VideoWriter video;
-    if (input_type.is_video || input_type.is_camera) {    
-        init_video_writer("./processed_video.mp4", video, fps, org_width, org_height);
-    }
+    //cv::VideoWriter video;
+    //if (input_type.is_video || input_type.is_camera) {
+    //    init_video_writer("./processed_video.mp4", video, fps, org_width, org_height);
+    //}
     int i = 0;
     while (true) {
         show_progress(input_type, i, frame_count);
@@ -337,12 +335,14 @@ hailo_status run_post_process(
         if (!results_queue->pop(output_item)) {
             break;
         }
-        auto& frame_to_draw = output_item.org_frame;
 
         if (!output_item.output_data_and_infos.empty() && postprocess_callback) {
-            postprocess_callback(frame_to_draw, output_item.output_data_and_infos);
+            postprocess_callback(output_item.output_data_and_infos,
+                ros_node,
+                org_width,
+                org_height);
         }
-        
+        /*
         if (input_type.is_video || input_type.is_camera) {
             video.write(frame_to_draw);
         }
@@ -353,10 +353,10 @@ hailo_status run_post_process(
             cv::imwrite("processed_image_" + std::to_string(i) + ".jpg", frame_to_draw);
             if (input_type.is_image) {break;}
             else if (input_type.directory_entry_count - 1 == i) {break;}
-        }
+        }*/
         i++;
     }
-    release_resources(capture, video, input_type, nullptr, results_queue);
+    release_resources(capture, /*video,*/ input_type, nullptr, results_queue);
     return HAILO_SUCCESS;
 }
 
@@ -376,7 +376,7 @@ hailo_status run_inference_async(HailoInfer& model,
         model.infer(
                     preprocessed_frame_items.second,
                     [org_frames = preprocessed_frame_items.first, queue = results_queue](
-                        const hailort::AsyncInferCompletionInfo &info,
+                        [[maybe_unused]] const hailort::AsyncInferCompletionInfo &info,
                         const std::vector<std::pair<uint8_t*, hailo_vstream_info_t>> &output_data_and_infos,
                         const std::vector<std::shared_ptr<uint8_t>> &output_guards)
                     {
@@ -411,7 +411,7 @@ hailo_status run_preprocess(const std::string& input_path, const std::string& he
     print_net_banner(get_hef_name(hef_path), std::ref(model.get_inputs()), std::ref(model.get_outputs()));
 
     if (input_type.is_image) {
-        preprocess_image_frames(input_path, model_input_shape.width, model_input_shape.height, batch_size, preprocessed_batch_queue, preprocess_callback);
+        preprocess_image_frames(input_path, model_input_shape.width, model_input_shape.height, preprocessed_batch_queue, preprocess_callback);
     }
     else if (input_type.is_directory) {
         preprocess_directory_of_images(input_path, model_input_shape.width, model_input_shape.height, batch_size, preprocessed_batch_queue, preprocess_callback);
@@ -422,12 +422,12 @@ hailo_status run_preprocess(const std::string& input_path, const std::string& he
     return HAILO_SUCCESS;
 }
 
-void release_resources(cv::VideoCapture &capture, cv::VideoWriter &video, InputType &input_type,
+void release_resources(cv::VideoCapture &capture, /*cv::VideoWriter &video,*/ InputType &input_type,
                       std::shared_ptr<BoundedTSQueue<std::pair<std::vector<cv::Mat>, std::vector<cv::Mat>>>> preprocessed_batch_queue,
                       std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue) {
-    if (input_type.is_video) {
-        video.release();
-    }
+    //if (input_type.is_video) {
+    //    video.release();
+    //}
     if (input_type.is_camera) {
         capture.release();
         cv::destroyAllWindows();

@@ -19,6 +19,11 @@
 #include <condition_variable>
 #include <functional>
 
+#include "rclcpp/rclcpp.hpp"
+#include "vision_msgs/msg/detection2_d_array.hpp"
+#include "vision_msgs/msg/detection2_d.hpp"
+#include "vision_msgs/msg/object_hypothesis_with_pose.hpp"
+
 #include "hailo_infer.hpp"
 
 
@@ -57,7 +62,10 @@ struct CommandLineArgs {
 };
 // Callback types for task-specific processing
 using PreprocessCallback = std::function<void(const std::vector<cv::Mat>&, std::vector<cv::Mat>&, uint32_t, uint32_t)>;
-using PostprocessCallback = std::function<void(cv::Mat&, const std::vector<std::pair<uint8_t*, hailo_vstream_info_t>>&)>;
+using PostprocessCallback = std::function<void(const std::vector<std::pair<uint8_t*, hailo_vstream_info_t>>&,
+                                    std::shared_ptr<rclcpp::Node> ros_node,
+                                    int input_w,
+                                    int input_h)>;
 
 // Status/Error
 hailo_status check_status(const hailo_status &status, const std::string &message);
@@ -91,7 +99,6 @@ void print_net_banner(const std::string &detection_model_name,
 void show_progress_helper(size_t current, size_t total);
 void show_progress(InputType &input_type, int progress, size_t frame_count);
 void print_inference_statistics(std::chrono::duration<double> inference_time,
-                                const std::string &hef_file,
                                 double frame_count,
                                 std::chrono::duration<double> total_time);
 void init_video_writer(const std::string &output_path, cv::VideoWriter &video,
@@ -166,7 +173,7 @@ void preprocess_video_frames(cv::VideoCapture &capture,
                           PreprocessCallback preprocess_callback);
 
 void preprocess_image_frames(const std::string &input_path,
-                          uint32_t width, uint32_t height, size_t batch_size,
+                          uint32_t width, uint32_t height,
                           std::shared_ptr<BoundedTSQueue<std::pair<std::vector<cv::Mat>, std::vector<cv::Mat>>>> preprocessed_batch_queue,
                           PreprocessCallback preprocess_callback);
 
@@ -182,10 +189,10 @@ hailo_status run_post_process(
     int org_width,
     size_t frame_count,
     cv::VideoCapture &capture,
-    double fps,
-    size_t batch_size,
     std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue,
-    PostprocessCallback postprocess_callback);
+    std::shared_ptr<rclcpp::Node> ros_node,
+    PostprocessCallback postprocess_callback
+);
 
 // Generic inference function
 hailo_status run_inference_async(HailoInfer& model,
@@ -201,7 +208,7 @@ hailo_status run_preprocess(const std::string& input_path, const std::string& he
                             PreprocessCallback preprocess_callback);
 
 // Resource management
-void release_resources(cv::VideoCapture &capture, cv::VideoWriter &video, InputType &input_type,
+void release_resources(cv::VideoCapture &capture, /*cv::VideoWriter &video,*/ InputType &input_type,
                       std::shared_ptr<BoundedTSQueue<std::pair<std::vector<cv::Mat>, std::vector<cv::Mat>>>> preprocessed_batch_queue,
                       std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue);
 

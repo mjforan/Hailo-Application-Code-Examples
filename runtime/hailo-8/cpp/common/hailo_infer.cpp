@@ -36,7 +36,7 @@ HailoInfer::HailoInfer(const std::string &hef_path, size_t batch_size)
 
 HailoInfer::HailoInfer(const std::string &hef_path,const std::string &group_id, size_t batch_size)
 {
-    hailo_vdevice_params_t vdevice_params = {0};
+    hailo_vdevice_params_t vdevice_params;
     hailo_init_vdevice_params(&vdevice_params);
     vdevice_params.group_id = group_id.c_str();
     

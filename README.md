@@ -1,3 +1,7 @@
+# Modified to publish ROS 2 detection messages
+
+# See [rpicam_hailo_ros](https://www.github.com/mjforan/rpicam_hailo_ros) for build details
+
 ![github_code](banner.jpeg)
  
 

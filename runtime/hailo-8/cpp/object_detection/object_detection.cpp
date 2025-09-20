@@ -35,16 +35,50 @@ void preprocess_callback(const std::vector<cv::Mat>& org_frames,
 }
 
 // Task-specific postprocessing callback
-void postprocess_callback(cv::Mat& frame_to_draw, 
-                                         const std::vector<std::pair<uint8_t*, hailo_vstream_info_t>>& output_data_and_infos) {
+void postprocess_callback(const std::vector<std::pair<uint8_t*, hailo_vstream_info_t>>& output_data_and_infos,
+                                        std::shared_ptr<rclcpp::Node> ros_node,
+                                        int input_w,
+                                        int input_h
+) {
+    auto ros_publisher = ros_node->create_publisher<vision_msgs::msg::Detection2DArray>("/hailo/detections", 10);
     size_t class_count = 80; // 80 classes in COCO dataset
     auto bboxes = parse_nms_data(output_data_and_infos[0].first, class_count);
-    draw_bounding_boxes(frame_to_draw, bboxes);
+    //draw_bounding_boxes(frame_to_draw, bboxes);
+    // Construct ROS message and publish
+    vision_msgs::msg::Detection2DArray det_arr_msg;
+    // TODO get timestamp of original image - not currently possible with Hailo tools
+    det_arr_msg.header.stamp = ros_node->get_clock()->now();
+    det_arr_msg.header.frame_id = "hailo_frame";
+    for (const NamedBbox & detection : bboxes) {
+        vision_msgs::msg::Detection2D det_msg;
+        det_msg.header.stamp = det_arr_msg.header.stamp;
+        det_msg.header.frame_id = det_arr_msg.header.frame_id;
+        det_msg.id = "0"; // TODO get tracker ID
+        det_msg.bbox.center.position.x = input_w*(detection.bbox.x_min + detection.bbox.x_max)/2;
+        det_msg.bbox.center.position.y = input_h*(detection.bbox.y_min + detection.bbox.y_max)/2;
+        det_msg.bbox.size_x            = input_w*(detection.bbox.x_max - detection.bbox.x_min);
+        det_msg.bbox.size_y            = input_h*(detection.bbox.y_max - detection.bbox.y_min);
+        det_msg.results.push_back(vision_msgs::msg::ObjectHypothesisWithPose());
+        det_msg.results[0].hypothesis.class_id = std::to_string(detection.class_id);
+        det_msg.results[0].hypothesis.score    = detection.bbox.score;
+        det_arr_msg.detections.push_back(det_msg);
+    }
+
+    ros_publisher->publish(det_arr_msg);
 }
 
 int main(int argc, char** argv)
 {
-    double fps = 30;
+    CommandLineArgs args;
+
+    rclcpp::init(argc, argv);
+    auto ros_node = std::make_shared<rclcpp::Node>("hailo_detect");
+    ros_node->declare_parameter("model", "/model.hef");
+    args.detection_hef = ros_node->get_parameter("model").as_string();
+    ros_node->declare_parameter("source", "/dev/video0");
+    args.input_path = ros_node->get_parameter("source").as_string();
+    ros_node->declare_parameter("batch_size", 1);
+    size_t batch_size = ros_node->get_parameter("batch_size").as_int();
 
     std::chrono::duration<double> inference_time;
     std::chrono::time_point<std::chrono::system_clock> t_start = std::chrono::high_resolution_clock::now();
@@ -53,10 +87,13 @@ int main(int argc, char** argv)
     size_t frame_count;
     InputType input_type;
 
-    CommandLineArgs args = parse_command_line_arguments(argc, argv);
-    auto batch_size = std::stoi(args.batch_size);
     HailoInfer model(args.detection_hef, batch_size);
     input_type = determine_input_type(args.input_path, std::ref(capture), org_height, org_width, frame_count, batch_size);
+
+    capture.open(args.input_path, cv::CAP_ANY);
+    if (!capture.isOpened()) {
+        throw std::runtime_error("Unable to read input file");
+    }
 
     auto preprocess_thread = std::async(run_preprocess,
                                         args.input_path,
@@ -80,9 +117,8 @@ int main(int argc, char** argv)
                                 org_width,
                                 frame_count,
                                 std::ref(capture),
-                                fps,
-                                batch_size,
                                 results_queue,
+                                ros_node,
                                 postprocess_callback);
 
     hailo_status status = wait_and_check_threads(
@@ -96,8 +132,9 @@ int main(int argc, char** argv)
 
     if(!input_type.is_camera) {
         std::chrono::time_point<std::chrono::system_clock> t_end = std::chrono::high_resolution_clock::now();
-        print_inference_statistics(inference_time, args.detection_hef, frame_count, t_end - t_start);
+        print_inference_statistics(inference_time, frame_count, t_end - t_start);
     }
 
+    rclcpp::shutdown();
     return HAILO_SUCCESS;
 }
