@@ -24,6 +24,8 @@
 #include "vision_msgs/msg/detection2_d.hpp"
 #include "vision_msgs/msg/object_hypothesis_with_pose.hpp"
 
+#include "ByteTrack/BYTETracker.h"
+
 #include "hailo_infer.hpp"
 
 
@@ -64,6 +66,7 @@ struct CommandLineArgs {
 using PreprocessCallback = std::function<void(const std::vector<cv::Mat>&, std::vector<cv::Mat>&, uint32_t, uint32_t)>;
 using PostprocessCallback = std::function<void(const std::vector<std::pair<uint8_t*, hailo_vstream_info_t>>&,
                                     std::shared_ptr<rclcpp::Node> ros_node,
+                                    std::shared_ptr<byte_track::BYTETracker> tracker,
                                     int input_w,
                                     int input_h)>;
 
@@ -191,6 +194,7 @@ hailo_status run_post_process(
     cv::VideoCapture &capture,
     std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue,
     std::shared_ptr<rclcpp::Node> ros_node,
+    std::shared_ptr<byte_track::BYTETracker> tracker,
     PostprocessCallback postprocess_callback
 );
 

@@ -322,6 +322,7 @@ hailo_status run_post_process(
     cv::VideoCapture &capture,
     std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue,
     std::shared_ptr<rclcpp::Node> ros_node,
+    std::shared_ptr<byte_track::BYTETracker> tracker,
     PostprocessCallback postprocess_callback) {
     
     //cv::VideoWriter video;
@@ -339,6 +340,7 @@ hailo_status run_post_process(
         if (!output_item.output_data_and_infos.empty() && postprocess_callback) {
             postprocess_callback(output_item.output_data_and_infos,
                 ros_node,
+                tracker,
                 org_width,
                 org_height);
         }

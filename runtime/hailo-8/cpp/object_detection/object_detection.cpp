@@ -12,6 +12,10 @@ using namespace hailo_utils;
 #include "hailo_infer.hpp"
 #include "utils.hpp"
 
+#include "ByteTrack/BYTETracker.h"
+#include "ByteTrack/Object.h"
+#include "ByteTrack/Rect.h"
+
 namespace fs = std::filesystem;
 
 /////////// Constants ///////////
@@ -37,6 +41,7 @@ void preprocess_callback(const std::vector<cv::Mat>& org_frames,
 // Task-specific postprocessing callback
 void postprocess_callback(const std::vector<std::pair<uint8_t*, hailo_vstream_info_t>>& output_data_and_infos,
                                         std::shared_ptr<rclcpp::Node> ros_node,
+                                        std::shared_ptr<byte_track::BYTETracker> tracker,
                                         int input_w,
                                         int input_h
 ) {
@@ -44,23 +49,44 @@ void postprocess_callback(const std::vector<std::pair<uint8_t*, hailo_vstream_in
     size_t class_count = 80; // 80 classes in COCO dataset
     auto bboxes = parse_nms_data(output_data_and_infos[0].first, class_count);
     //draw_bounding_boxes(frame_to_draw, bboxes);
+
+    // Convert format for bytetrack
+    std::vector<byte_track::Object> objects;
+    for (const NamedBbox & detection : bboxes) {
+        objects.push_back(
+            byte_track::Object(byte_track::Rect(
+                input_w*(detection.bbox.x_min + detection.bbox.x_max)/2,
+                input_h*(detection.bbox.y_min + detection.bbox.y_max)/2,
+                input_w*(detection.bbox.x_max - detection.bbox.x_min),
+                input_h*(detection.bbox.y_max - detection.bbox.y_min)
+            ),
+            detection.class_id,
+            detection.bbox.score)
+        );
+    }
+
+    // Update tracker
+    const std::vector<byte_track::BYTETracker::STrackPtr> outputs = tracker->update(objects);
+
     // Construct ROS message and publish
     vision_msgs::msg::Detection2DArray det_arr_msg;
     // TODO get timestamp of original image - not currently possible with Hailo tools
     det_arr_msg.header.stamp = ros_node->get_clock()->now();
     det_arr_msg.header.frame_id = "hailo_frame";
-    for (const NamedBbox & detection : bboxes) {
+    for (const auto &tracked_detection : outputs)
+    {
         vision_msgs::msg::Detection2D det_msg;
         det_msg.header.stamp = det_arr_msg.header.stamp;
         det_msg.header.frame_id = det_arr_msg.header.frame_id;
-        det_msg.id = "0"; // TODO get tracker ID
-        det_msg.bbox.center.position.x = input_w*(detection.bbox.x_min + detection.bbox.x_max)/2;
-        det_msg.bbox.center.position.y = input_h*(detection.bbox.y_min + detection.bbox.y_max)/2;
-        det_msg.bbox.size_x            = input_w*(detection.bbox.x_max - detection.bbox.x_min);
-        det_msg.bbox.size_y            = input_h*(detection.bbox.y_max - detection.bbox.y_min);
+        det_msg.id = tracked_detection->getTrackId();
+        const auto &rect = tracked_detection->getRect();
+        det_msg.bbox.center.position.x = rect.x();
+        det_msg.bbox.center.position.y = rect.y();
+        det_msg.bbox.size_x            = rect.width();
+        det_msg.bbox.size_y            = rect.height();
         det_msg.results.push_back(vision_msgs::msg::ObjectHypothesisWithPose());
-        det_msg.results[0].hypothesis.class_id = std::to_string(detection.class_id);
-        det_msg.results[0].hypothesis.score    = detection.bbox.score;
+        det_msg.results[0].hypothesis.class_id = "0";//std::to_string(detection.class_id); // TODO
+        det_msg.results[0].hypothesis.score    = tracked_detection->getScore();
         det_arr_msg.detections.push_back(det_msg);
     }
 
@@ -94,6 +120,10 @@ int main(int argc, char** argv)
     if (!capture.isOpened()) {
         throw std::runtime_error("Unable to read input file");
     }
+    double fps = capture.get(cv::CAP_PROP_FPS);
+
+    // buffer missing track for 1s
+    auto tracker = std::make_shared<byte_track::BYTETracker>(fps, 1.0*fps);
 
     auto preprocess_thread = std::async(run_preprocess,
                                         args.input_path,
@@ -119,6 +149,7 @@ int main(int argc, char** argv)
                                 std::ref(capture),
                                 results_queue,
                                 ros_node,
+                                tracker,
                                 postprocess_callback);
 
     hailo_status status = wait_and_check_threads(
