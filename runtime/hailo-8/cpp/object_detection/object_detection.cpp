@@ -13,7 +13,7 @@ using namespace hailo_utils;
 #include "utils.hpp"
 
 #include "ByteTrack/BYTETracker.h"
-#include "ByteTrack/Object.h"
+#include "ByteTrack/Track.h"
 #include "ByteTrack/Rect.h"
 
 namespace fs = std::filesystem;
@@ -51,42 +51,43 @@ void postprocess_callback(const std::vector<std::pair<uint8_t*, hailo_vstream_in
     //draw_bounding_boxes(frame_to_draw, bboxes);
 
     // Convert format for bytetrack
-    std::vector<byte_track::Object> objects;
+    std::vector<byte_track::DetectionPtr> detections;
     for (const NamedBbox & detection : bboxes) {
-        objects.push_back(
-            byte_track::Object(byte_track::Rect(
-                input_w*(detection.bbox.x_min + detection.bbox.x_max)/2,
-                input_h*(detection.bbox.y_min + detection.bbox.y_max)/2,
-                input_w*(detection.bbox.x_max - detection.bbox.x_min),
-                input_h*(detection.bbox.y_max - detection.bbox.y_min)
-            ),
-            detection.class_id,
-            detection.bbox.score)
+        detections.push_back(
+            std::make_shared<byte_track::Detection>(      
+                byte_track::TlwhRect(          
+                    input_w*(detection.bbox.x_min + detection.bbox.x_max)/2,
+                    input_h*(detection.bbox.y_min + detection.bbox.y_max)/2,
+                    input_w*(detection.bbox.x_max - detection.bbox.x_min),
+                    input_h*(detection.bbox.y_max - detection.bbox.y_min)
+                ),
+                detection.bbox.score
+            )
         );
     }
 
     // Update tracker
-    const std::vector<byte_track::BYTETracker::STrackPtr> outputs = tracker->update(objects);
+    const std::vector<byte_track::TrackPtr> outputs = tracker->update(detections);
 
     // Construct ROS message and publish
     vision_msgs::msg::Detection2DArray det_arr_msg;
     // TODO get timestamp of original image - not currently possible with Hailo tools
     det_arr_msg.header.stamp = ros_node->get_clock()->now();
     det_arr_msg.header.frame_id = "hailo_frame";
-    for (const auto &tracked_detection : outputs)
+    for (const auto &track_ptr : outputs)
     {
         vision_msgs::msg::Detection2D det_msg;
         det_msg.header.stamp = det_arr_msg.header.stamp;
         det_msg.header.frame_id = det_arr_msg.header.frame_id;
-        det_msg.id = tracked_detection->getTrackId();
-        const auto &rect = tracked_detection->getRect();
-        det_msg.bbox.center.position.x = rect.x();
-        det_msg.bbox.center.position.y = rect.y();
+        det_msg.id = std::to_string(track_ptr->get_track_id());
+        const auto &rect = track_ptr->predictedRect;
+        det_msg.bbox.center.position.x = rect.top();
+        det_msg.bbox.center.position.y = rect.left();
         det_msg.bbox.size_x            = rect.width();
         det_msg.bbox.size_y            = rect.height();
         det_msg.results.push_back(vision_msgs::msg::ObjectHypothesisWithPose());
-        det_msg.results[0].hypothesis.class_id = "0";//std::to_string(detection.class_id); // TODO
-        det_msg.results[0].hypothesis.score    = tracked_detection->getScore();
+        det_msg.results[0].hypothesis.class_id = std::to_string(0);
+        det_msg.results[0].hypothesis.score    = track_ptr->detection->score();
         det_arr_msg.detections.push_back(det_msg);
     }
 
@@ -105,6 +106,8 @@ int main(int argc, char** argv)
     args.input_path = ros_node->get_parameter("source").as_string();
     ros_node->declare_parameter("batch_size", 1);
     size_t batch_size = ros_node->get_parameter("batch_size").as_int();
+    ros_node->declare_parameter("confidence_threshold", 0.7);
+    ros_node->declare_parameter("yolo_classes_to_track", -1);
 
     std::chrono::duration<double> inference_time;
     std::chrono::time_point<std::chrono::system_clock> t_start = std::chrono::high_resolution_clock::now();
